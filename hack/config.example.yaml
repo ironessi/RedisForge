@@ -1,0 +1,12 @@
+# CLI tool config for development.
+# Copy this file to hack/config.yaml and replace the database credentials.
+gfcli:
+  gen:
+    dao:
+      - link: "mysql:root:password@tcp(127.0.0.1:3306)/redis_forge"
+        descriptionTag: true
+
+  docker:
+    build: "-a amd64 -s linux -p temp -ew"
+    tagPrefixes:
+      - my.image.pub/my-app

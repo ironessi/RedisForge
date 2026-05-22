@@ -50,10 +50,20 @@ func Register(ctx context.Context, username, password, nickname string) (userId 
 
 // Login 校验用户账号密码，成功后返回 JWT。
 // 这里不直接暴露“用户不存在”或“密码错误”的具体原因，避免泄露账号是否存在。
-func Login(ctx context.Context, username, password string) (string, error) {
+func Login(ctx context.Context, username, password, captcha string) (string, error) {
 	var user entity.User
+
+	// 先校验验证码，验证码错误时不继续校验账号密码。
+	ok, err := VerifyCaptcha(ctx, username, captcha)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", gerror.New("验证码错误")
+	}
+
 	//查询用户
-	err := dao.User.Ctx(ctx).Where("username", username).Scan(&user)
+	err = dao.User.Ctx(ctx).Where("username", username).Scan(&user)
 	if err != nil {
 		return "", gerror.New("用户名或密码错误")
 	}
@@ -69,6 +79,12 @@ func Login(ctx context.Context, username, password string) (string, error) {
 	if err != nil {
 		return "", gerror.New("用户名或密码错误")
 	}
+
+	// 验证码已经通过，登录成功后删除验证码，保证验证码只能使用一次。
+	if err := DeleteCaptcha(ctx, username); err != nil {
+		return "", err
+	}
+
 	token, err := jwtLogic.GenerateToken(ctx, int64(user.Id), user.Username)
 	if err != nil {
 		return "", err

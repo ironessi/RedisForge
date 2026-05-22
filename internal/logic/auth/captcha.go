@@ -48,3 +48,11 @@ func VerifyCaptcha(ctx context.Context, username, code string) (bool, error) {
 func captchaKey(username string) string {
 	return fmt.Sprintf("auth:captcha:%s", username)
 }
+
+// DeleteCaptcha 删除已经使用过的验证码。
+// 登录成功后删除验证码，避免同一个验证码被重复使用。
+func DeleteCaptcha(ctx context.Context, username string) error {
+	key := captchaKey(username) // 生成 Redis key，例如 "captcha:username"
+	_, err := g.Redis().Del(ctx, key)
+	return err
+}

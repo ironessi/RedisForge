@@ -18,7 +18,7 @@ type LoginReq struct {
 	g.Meta   `path:"/auth/login" method:"post" tags:"Auth" summary:"用户登录"`
 	Username string `json:"username" v:"required|length:3,20#请输入用户名|用户名长度为3~20位"`
 	Password string `json:"password" v:"required|length:6,20#请输入密码|密码长度为6~20位"`
-	Captcha  string `json:"captcha" v:"required|length:6#请输入验证码|验证码长度为6位"`
+	Captcha  string `json:"captcha" v:"required|length:6,6#请输入验证码|验证码长度为6位"`
 }
 
 // LoginRes 是用户登录响应。

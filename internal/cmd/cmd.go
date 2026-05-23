@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"redis-demo/internal/controller/auth"
+	"redis-demo/internal/controller/team"
 	"redis-demo/internal/controller/user"
 	"redis-demo/internal/middleware"
 
@@ -18,6 +19,8 @@ var (
 		Brief: "start http server",
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
 			s := g.Server()
+			// 将 resource/public 作为静态资源目录，浏览器访问 / 时会加载前端页面。
+			s.SetServerRoot("resource/public")
 			s.Group("/", func(group *ghttp.RouterGroup) {
 				group.Middleware(ghttp.MiddlewareHandlerResponse)
 				// auth 相关接口不需要登录，例如注册和登录。
@@ -29,6 +32,7 @@ var (
 					group.Middleware(middleware.Auth) // JWT 鉴权中间件，验证用户身份并把用户信息写入请求上下文
 					group.Bind(
 						user.NewV1(),
+						team.NewV1(),
 					)
 				})
 			})

@@ -13,3 +13,13 @@ type ProfileRes struct {
 	Username string `json:"username"` // 用户名
 	Nickname string `json:"nickname"`
 }
+
+// UpdateProfileReq 是更新当前登录用户资料的请求。
+// userId 不由前端传入，而是从 JWT 鉴权上下文中获取。
+type UpdateProfileReq struct {
+	g.Meta   `path:"/user/profile" method:"put" tags:"User" summary:"更新用户信息"`
+	Nickname string `json:"nickname" v:"required|length:3,20#请输入昵称|昵称长度为3~20位"`
+}
+
+// UpdateProfileRes 是更新用户资料的响应。
+type UpdateProfileRes struct{}

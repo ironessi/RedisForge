@@ -21,6 +21,16 @@ func profileCacheKey(userId uint64) string {
 	return fmt.Sprintf("user:profile:%d", userId)
 }
 
+// DeleteProfileCache 删除用户资料缓存。
+// 当用户资料发生变更后调用，保证下次查询能重新从 MySQL 加载最新数据。
+func DeleteProfileCache(ctx context.Context, userId uint64) error {
+	key := profileCacheKey(userId)
+
+	//Del返回被删除的 key 的数量，成功删除返回 1，key 不存在返回 0。
+	_, err := g.Redis().Del(ctx, key)
+	return err
+}
+
 // GetProfile 获取用户资料。
 // 当前先从 MySQL 查询，下一步再加 Redis 缓存。
 func GetProfile(ctx context.Context, userId uint64) (*v1.ProfileRes, error) {
@@ -70,4 +80,31 @@ func GetProfile(ctx context.Context, userId uint64) (*v1.ProfileRes, error) {
 	}
 
 	return profile, nil
+}
+
+// UpdateProfile 更新当前用户资料。
+// 更新 MySQL 成功后删除 Redis 缓存，让下次查询重新加载最新数据。
+func UpdateProfile(ctx context.Context, userId uint64, nickname string) error {
+	// 先确认用户是否存在，避免更新不存在的用户。
+	count, err := dao.User.Ctx(ctx).Where("id", userId).Count() //查询用户数量
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return gerror.New("用户不存在")
+	}
+
+	// 更新 MySQL 中的用户资料。
+	_, err = dao.User.Ctx(ctx).Where("id", userId).Data(g.Map{
+		"nickname": nickname,
+	}).Update()
+	if err != nil {
+		return err
+	}
+
+	// 更新成功后删除 Redis 缓存。
+	if err := DeleteProfileCache(ctx, userId); err != nil {
+		return err
+	}
+	return nil
 }

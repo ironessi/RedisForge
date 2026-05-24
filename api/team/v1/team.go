@@ -17,10 +17,30 @@ type CreateRes struct {
 // AddMemberReq 是添加团队成员请求。
 // teamId 来自路径参数，userId 是要添加进团队的用户ID。
 type AddMemberReq struct {
-	g.Meta `path:"/team/{teamId}/members" method:"post" tags:"Team" summary:"添加团队成员"`
+	g.Meta `path:"/teams/{teamId}/members" method:"post" tags:"Team" summary:"添加团队成员"`
 	TeamId uint64 `json:"teamId" v:"required|min:1#团队ID不能为空|团队ID不合法"`
 	UserId uint64 `json:"userId" v:"required|min:1#用户ID不能为空|用户ID不合法"`
 }
 
 // AddMemberRes 是添加团队成员响应。
 type AddMemberRes struct{}
+
+// MemberItem 是团队成员列表项。
+type MemberItem struct {
+	UserId   uint64 `json:"userId"`
+	Username string `json:"username"`
+	Nickname string `json:"nickname"`
+	Role     string `json:"role"` // owner 或 member
+}
+
+// MembersReq 是查询团队成员请求。
+// teamId 来自路径参数。
+type MembersReq struct {
+	g.Meta `path:"/teams/{teamId}/members" method:"get" tags:"Team" summary:"查询团队成员"`
+	TeamId uint64 `json:"teamId" v:"required|min:1#团队ID不能为空|团队ID不合法"`
+}
+
+// MembersRes 是查询团队成员响应。
+type MembersRes struct {
+	Members []MemberItem `json:"members"` // 切片吗？是的，团队成员列表可能有多个成员，所以用切片来表示。
+}

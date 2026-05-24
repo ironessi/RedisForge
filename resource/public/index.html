@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RedisForge Console</title>
-  <link rel="stylesheet" href="/resource/css/app.css">
+  <link rel="stylesheet" href="/resource/css/app.css?v=20260524-3">
 </head>
 <body>
   <main class="shell">
@@ -13,7 +13,7 @@
         <div class="brand-mark">RF</div>
         <div>
           <h1>RedisForge</h1>
-          <p>Team operations console</p>
+          <p>Collaboration backend lab</p>
         </div>
       </div>
 
@@ -22,34 +22,76 @@
           <span>Session</span>
           <strong id="sessionState">Offline</strong>
         </div>
-        <p id="sessionUser" class="muted">登录后这里会显示当前用户。</p>
+        <p id="sessionUser" class="muted">登录后会显示当前用户和缓存 key。</p>
+        <div class="token-meter">
+          <span></span>
+        </div>
         <button id="logoutBtn" class="ghost full" type="button">退出登录</button>
       </section>
 
       <section class="panel redis-panel">
         <div class="panel-title">
-          <span>Redis Touchpoints</span>
+          <span>Redis Map</span>
         </div>
         <ul class="redis-list">
-          <li><span class="dot string"></span>验证码 String + TTL</li>
-          <li><span class="dot cache"></span>用户资料缓存</li>
-          <li><span class="dot set"></span>团队成员 Set</li>
-          <li><span class="dot lock"></span>JWT 黑名单</li>
+          <li><span class="dot string"></span><b>String</b><small>验证码、JWT 黑名单、在线心跳</small></li>
+          <li><span class="dot cache"></span><b>Cache</b><small>用户资料 Cache Aside</small></li>
+          <li><span class="dot set"></span><b>Set</b><small>团队成员、在线候选人</small></li>
+          <li><span class="dot ttl"></span><b>TTL</b><small>验证码 5 分钟、心跳 60 秒</small></li>
         </ul>
+      </section>
+
+      <section class="panel trail-panel">
+        <div class="panel-title">
+          <span>Operation Trail</span>
+        </div>
+        <div id="eventTrail" class="event-trail">
+          <p>等待第一次操作。</p>
+        </div>
       </section>
     </aside>
 
     <section class="workspace">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Internal collaboration lab</p>
-          <h2>账号、资料与团队</h2>
+          <p class="eyebrow">Internal collaboration console</p>
+          <h2>身份、团队与在线状态</h2>
         </div>
-        <button id="refreshProfileBtn" class="icon-text" type="button">刷新资料</button>
+        <div class="top-actions">
+          <button id="refreshProfileBtn" class="secondary" type="button">刷新资料</button>
+          <button id="clearLogBtn" class="link-button" type="button">清空日志</button>
+        </div>
       </header>
+
+      <section class="status-strip" aria-label="系统状态">
+        <div class="status-card">
+          <span>Auth</span>
+          <strong id="authMetric">未登录</strong>
+        </div>
+        <div class="status-card">
+          <span>User Cache</span>
+          <strong id="cacheMetric">未加载</strong>
+        </div>
+        <div class="status-card">
+          <span>Team Context</span>
+          <strong id="teamMetric">无团队</strong>
+        </div>
+        <div class="status-card">
+          <span>Presence</span>
+          <strong id="presenceMetric">未心跳</strong>
+        </div>
+      </section>
 
       <div class="grid">
         <section class="panel auth-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Account</span>
+              <h3>登录与注册</h3>
+            </div>
+            <div class="mini-badge">String + TTL</div>
+          </div>
+
           <div class="tabs" role="tablist" aria-label="账号操作">
             <button class="tab active" type="button" data-tab="login">登录</button>
             <button class="tab" type="button" data-tab="register">注册</button>
@@ -71,8 +113,8 @@
               </label>
               <button id="captchaBtn" class="secondary" type="button">获取</button>
             </div>
-            <p id="captchaHint" class="hint">验证码会写入 Redis，5 分钟后过期。</p>
-            <button class="primary full" type="submit">登录</button>
+            <p id="captchaHint" class="hint">验证码写入 Redis，5 分钟后自动过期。</p>
+            <button class="primary full" type="submit">登录控制台</button>
           </form>
 
           <form id="registerForm" class="form" data-pane="register">
@@ -93,61 +135,127 @@
         </section>
 
         <section class="panel profile-card">
-          <div class="panel-title">
-            <span>Profile Cache</span>
-            <strong>user:profile:{id}</strong>
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Identity</span>
+              <h3>当前用户</h3>
+            </div>
+            <div class="mini-badge">Cache Aside</div>
           </div>
           <div class="profile-box">
             <div class="avatar" id="profileAvatar">?</div>
             <div>
               <h3 id="profileName">未登录</h3>
-              <p id="profileMeta" class="muted">登录后读取用户资料缓存。</p>
+              <p id="profileMeta" class="muted">登录后读取 user:profile:{id}。</p>
             </div>
           </div>
           <form id="profileForm" class="inline-form">
             <label>
               新昵称
-              <input name="nickname" placeholder="更新昵称后删除缓存" required>
+              <input name="nickname" placeholder="更新后删除用户缓存" required>
             </label>
             <button class="secondary" type="submit">更新</button>
           </form>
         </section>
 
-        <section class="panel team-card">
-          <div class="panel-title">
-            <span>Team Set</span>
-            <strong>team:members:{id}</strong>
+        <section class="panel team-card wide-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Workspace</span>
+              <h3>团队成员</h3>
+            </div>
+            <div class="mini-badge">Set + TTL</div>
           </div>
-          <form id="teamForm" class="form active">
-            <label>
-              团队名称
-              <input name="name" placeholder="研发一组" required>
-            </label>
-            <button class="primary full" type="submit">创建团队</button>
-          </form>
-          <form id="memberForm" class="inline-form">
+          <div class="team-layout">
+            <div class="team-forms">
+              <form id="teamForm" class="form active">
+                <label>
+                  团队名称
+                  <input name="name" placeholder="研发一组" required>
+                </label>
+                <button class="primary full" type="submit">创建团队</button>
+              </form>
+              <form id="memberForm" class="inline-form stacked-mobile">
+                <label>
+                  团队 ID
+                  <input name="teamId" inputmode="numeric" placeholder="1" required>
+                </label>
+                <label>
+                  用户 ID
+                  <input name="userId" inputmode="numeric" placeholder="2" required>
+                </label>
+                <button class="secondary" type="submit">添加成员</button>
+              </form>
+              <button id="loadMembersBtn" class="secondary full member-load" type="button">查看成员</button>
+            </div>
+            <div>
+              <div class="list-title">成员列表</div>
+              <div id="memberList" class="member-list">创建或填写团队 ID 后查看成员。</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel presence-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Presence</span>
+              <h3>在线状态</h3>
+            </div>
+            <div class="mini-badge">双 key</div>
+          </div>
+          <form id="heartbeatForm" class="inline-form">
             <label>
               团队 ID
               <input name="teamId" inputmode="numeric" placeholder="1" required>
             </label>
-            <label>
-              用户 ID
-              <input name="userId" inputmode="numeric" placeholder="2" required>
-            </label>
-            <button class="secondary" type="submit">添加成员</button>
+            <button class="primary" type="submit">发送心跳</button>
           </form>
+          <button id="loadOnlineBtn" class="secondary full member-load" type="button">查看在线成员</button>
+          <div id="onlineList" class="member-list">心跳后 60 秒内会显示在线。</div>
+        </section>
+
+        <section class="panel flow-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Data Flow</span>
+              <h3>这次操作会打到哪里</h3>
+            </div>
+          </div>
+          <div class="flow-map">
+            <div class="flow-node active">
+              <b>HTTP</b>
+              <span>规范路由</span>
+            </div>
+            <div class="flow-line"></div>
+            <div class="flow-node">
+              <b>Logic</b>
+              <span>业务校验</span>
+            </div>
+            <div class="flow-line"></div>
+            <div class="flow-node redis-node">
+              <b>Redis</b>
+              <span id="flowRedis">等待操作</span>
+            </div>
+            <div class="flow-line"></div>
+            <div class="flow-node">
+              <b>MySQL</b>
+              <span>权威数据</span>
+            </div>
+          </div>
         </section>
 
         <section class="panel log-card">
-          <div class="panel-title">
-            <span>Request Log</span>
-            <button id="clearLogBtn" class="link-button" type="button">清空</button>
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Debug</span>
+              <h3>请求日志</h3>
+            </div>
           </div>
           <pre id="logOutput">等待操作...</pre>
         </section>
       </div>
     </section>
   </main>
-  <script src="/resource/js/app.js"></script>
+  <script src="/resource/js/app.js?v=20260524-3"></script>
 </body>
 </html>

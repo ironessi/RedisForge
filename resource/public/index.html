@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RedisForge Console</title>
-  <link rel="stylesheet" href="/resource/css/app.css?v=20260524-3">
+  <link rel="stylesheet" href="/resource/css/app.css?v=20260526-1">
 </head>
 <body>
   <main class="shell">
@@ -37,6 +37,7 @@
           <li><span class="dot string"></span><b>String</b><small>验证码、JWT 黑名单、在线心跳</small></li>
           <li><span class="dot cache"></span><b>Cache</b><small>用户资料 Cache Aside</small></li>
           <li><span class="dot set"></span><b>Set</b><small>团队成员、在线候选人</small></li>
+          <li><span class="dot list"></span><b>List</b><small>团队最近动态</small></li>
           <li><span class="dot ttl"></span><b>TTL</b><small>验证码 5 分钟、心跳 60 秒</small></li>
         </ul>
       </section>
@@ -79,6 +80,10 @@
         <div class="status-card">
           <span>Presence</span>
           <strong id="presenceMetric">未心跳</strong>
+        </div>
+        <div class="status-card">
+          <span>Activity Feed</span>
+          <strong id="activityMetric">未加载</strong>
         </div>
       </section>
 
@@ -195,6 +200,24 @@
           </div>
         </section>
 
+        <section class="panel activity-card wide-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Recent Activity</span>
+              <h3>团队动态</h3>
+            </div>
+            <div class="mini-badge">List + LTRIM</div>
+          </div>
+          <div class="activity-toolbar">
+            <label>
+              团队 ID
+              <input id="activityTeamId" inputmode="numeric" placeholder="1">
+            </label>
+            <button id="loadActivitiesBtn" class="secondary" type="button">刷新动态</button>
+          </div>
+          <div id="activityList" class="activity-list">暂无动态。</div>
+        </section>
+
         <section class="panel presence-card">
           <div class="section-head">
             <div>
@@ -256,6 +279,6 @@
       </div>
     </section>
   </main>
-  <script src="/resource/js/app.js?v=20260524-3"></script>
+  <script src="/resource/js/app.js?v=20260526-1"></script>
 </body>
 </html>

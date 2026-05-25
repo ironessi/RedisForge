@@ -2,6 +2,7 @@ const state = {
   token: localStorage.getItem("redisforge_token") || "",
   profile: null,
   lastTeamId: localStorage.getItem("redisforge_team_id") || "",
+  activityCount: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -77,6 +78,7 @@ function setLastTeamId(teamId) {
     localStorage.setItem("redisforge_team_id", state.lastTeamId);
     $("#memberForm").elements.teamId.value = state.lastTeamId;
     $("#heartbeatForm").elements.teamId.value = state.lastTeamId;
+    $("#activityTeamId").value = state.lastTeamId;
   }
   renderMetrics();
 }
@@ -85,6 +87,7 @@ function renderMetrics() {
   $("#authMetric").textContent = state.token ? "JWT 已签发" : "未登录";
   $("#cacheMetric").textContent = state.profile ? `user:${state.profile.userId}` : "未加载";
   $("#teamMetric").textContent = state.lastTeamId ? `team:${state.lastTeamId}` : "无团队";
+  $("#activityMetric").textContent = state.activityCount === null ? "未加载" : `${state.activityCount} 条`;
   document.body.classList.toggle("is-online", Boolean(state.token));
 }
 
@@ -109,14 +112,64 @@ function renderProfile(profile) {
 }
 
 function renderMembers(target, members, emptyText) {
-  target.innerHTML = members.length
-    ? members.map((member) => `
-        <div class="member-item">
-          <span>${member.nickname || member.username} · #${member.userId}</span>
-          <span class="role-pill">${member.role || "online"}</span>
-        </div>
-      `).join("")
-    : emptyText;
+  target.replaceChildren();
+  if (!members.length) {
+    target.textContent = emptyText;
+    return;
+  }
+
+  members.forEach((member) => {
+    const item = document.createElement("div");
+    item.className = "member-item";
+
+    const name = document.createElement("span");
+    name.textContent = `${member.nickname || member.username} · #${member.userId}`;
+
+    const role = document.createElement("span");
+    role.className = "role-pill";
+    role.textContent = member.role || "online";
+
+    item.append(name, role);
+    target.append(item);
+  });
+}
+
+function renderActivities(activities) {
+  const target = $("#activityList");
+  target.replaceChildren();
+  state.activityCount = activities.length;
+  renderMetrics();
+
+  if (!activities.length) {
+    target.textContent = "暂无动态。";
+    return;
+  }
+
+  activities.forEach((activity) => {
+    const item = document.createElement("div");
+    item.className = "activity-item";
+
+    const mark = document.createElement("div");
+    mark.className = "activity-mark";
+    mark.textContent = activity.action === "team.created" ? "+" : "@";
+
+    const body = document.createElement("div");
+    body.className = "activity-body";
+    const title = document.createElement("b");
+    title.textContent = activity.content;
+    const detail = document.createElement("small");
+    detail.textContent = activity.action === "team.created"
+      ? `发起人 #${activity.actorId}`
+      : `操作人 #${activity.actorId} · 成员 #${activity.targetUserId}`;
+    body.append(title, detail);
+
+    const time = document.createElement("time");
+    time.className = "activity-time";
+    time.textContent = new Date(activity.createdAt * 1000).toLocaleString();
+
+    item.append(mark, body, time);
+    target.append(item);
+  });
 }
 
 async function refreshProfile() {
@@ -239,6 +292,7 @@ $("#teamForm").addEventListener("submit", async (event) => {
     setLastTeamId(body.data.teamId);
     setLog("POST /teams", body, "team:members:{teamId}");
     await loadMembers(body.data.teamId);
+    await loadActivities(body.data.teamId);
   } catch (error) {
     setLog("创建团队失败", error, "team + team_member");
   }
@@ -256,6 +310,7 @@ $("#memberForm").addEventListener("submit", async (event) => {
     setLastTeamId(data.teamId);
     setLog(`POST /teams/${data.teamId}/members`, body, "SADD team:members:{teamId}");
     await loadMembers(data.teamId);
+    await loadActivities(data.teamId);
   } catch (error) {
     setLog("添加成员失败", error, "Set 去重");
   }
@@ -281,6 +336,29 @@ $("#loadMembersBtn").addEventListener("click", async () => {
     await loadMembers(teamId);
   } catch (error) {
     setLog("查询成员失败", error, "Set 缓存");
+  }
+});
+
+// Activity 使用 Redis List，创建团队或添加成员后可立刻刷新查看最近事件。
+async function loadActivities(teamId) {
+  if (!teamId) {
+    setLog("团队动态", "先填写团队 ID。", "team:activities");
+    return;
+  }
+
+  const body = await request(`/teams/${teamId}/activities`);
+  renderActivities(body.data.activities || []);
+  setLastTeamId(teamId);
+  setLog(`GET /teams/${teamId}/activities`, body, "LRANGE team:activities:{teamId}");
+}
+
+$("#loadActivitiesBtn").addEventListener("click", async () => {
+  const teamId = $("#activityTeamId").value.trim() || state.lastTeamId;
+
+  try {
+    await loadActivities(teamId);
+  } catch (error) {
+    setLog("查询动态失败", error, "Redis List");
   }
 });
 
@@ -333,6 +411,7 @@ renderSession();
 if (state.lastTeamId) {
   $("#memberForm").elements.teamId.value = state.lastTeamId;
   $("#heartbeatForm").elements.teamId.value = state.lastTeamId;
+  $("#activityTeamId").value = state.lastTeamId;
 }
 if (state.token) {
   refreshProfile().catch((error) => setLog("自动刷新资料失败", error, "token 可能过期"));

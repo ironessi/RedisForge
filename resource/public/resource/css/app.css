@@ -121,7 +121,7 @@ button {
 
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -267,6 +267,67 @@ input:focus {
 .team-card .inline-form {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   margin-top: 16px;
+}
+
+.activity-toolbar {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.activity-list {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-height: 86px;
+  padding: 4px 0;
+  color: var(--muted);
+}
+
+.activity-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+}
+
+.activity-item:not(:last-child)::before {
+  position: absolute;
+  top: 42px;
+  bottom: -3px;
+  left: 16px;
+  width: 2px;
+  content: "";
+  background: var(--line);
+}
+
+.activity-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--green);
+  background: #eef5ef;
+  border: 1px solid #c9dccb;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.activity-body b {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.activity-body small,
+.activity-time {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .member-load {
@@ -436,6 +497,7 @@ body.is-online .token-meter span {
 .dot.string { background: var(--green); }
 .dot.cache { background: var(--blue); }
 .dot.set { background: var(--amber); }
+.dot.list { background: #357a78; }
 .dot.ttl { background: var(--plum); }
 
 .event-trail {
@@ -533,6 +595,7 @@ pre {
   .inline-form,
   .team-card .inline-form,
   .team-layout,
+  .activity-toolbar,
   .status-strip,
   .grid,
   .flow-map {

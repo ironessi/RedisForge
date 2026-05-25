@@ -58,6 +58,16 @@ func CreateTeam(ctx context.Context, ownerId uint64, name string) (uint64, error
 		return 0, err
 	}
 
+	// 记录创建团队动态，用于团队工作台展示最近操作。
+	if err := AddActivity(ctx, uint64(teamId), v1.ActivityItem{
+		Action:    "team.created",
+		ActorId:   ownerId,
+		Content:   fmt.Sprintf("用户%d创建了团队 %s", ownerId, name),
+		CreatedAt: time.Now().Unix(),
+	}); err != nil {
+		return 0, err
+	}
+
 	return uint64(teamId), nil
 }
 
@@ -123,6 +133,17 @@ func AddMember(ctx context.Context, operatorId, teamId, targetUserId uint64) err
 	if _, err = g.Redis().Expire(ctx, key, int64(teamMembersCacheExpire.Seconds())); err != nil {
 		return err
 	}
+
+	if err := AddActivity(ctx, teamId, v1.ActivityItem{
+		Action:       "member.added",
+		ActorId:      operatorId,
+		TargetUserId: targetUserId,
+		Content:      fmt.Sprintf("用户%d被用户%d添加到团队", targetUserId, operatorId),
+		CreatedAt:    time.Now().Unix(),
+	}); err != nil {
+		return err
+	}
+
 	return nil
 
 }

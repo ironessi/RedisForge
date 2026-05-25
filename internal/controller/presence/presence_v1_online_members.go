@@ -23,7 +23,8 @@ func (c *ControllerV1) OnlineMembers(ctx context.Context, req *v1.OnlineMembersR
 		return nil, err
 	}
 
-	members := make([]v1.OnlineMembersItem, len(users))
+	// 预留容量但不提前创建元素，避免响应中出现空用户记录。
+	members := make([]v1.OnlineMembersItem, 0, len(users))
 	for _, user := range users {
 		members = append(members, v1.OnlineMembersItem{
 			UserId:   user.Id,

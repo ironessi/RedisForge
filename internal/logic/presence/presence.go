@@ -79,7 +79,7 @@ func GetOnlineMembers(ctx context.Context, teamId uint64) ([]entity.User, error)
 		}
 
 		// 顺手清理团队 Set 中的离线用户，避免脏数据长期堆积。
-		if _, err := g.Redis().SRem(ctx, teamKey, userId); err != nil {
+		if _, err := g.Redis().SRem(ctx, teamKey, userId); err != nil { //SRem() 移除集合中的元素。
 			return nil, err
 		}
 	}

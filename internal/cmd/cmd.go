@@ -4,6 +4,7 @@ import (
 	"context"
 	"redis-demo/internal/controller/auth"
 	"redis-demo/internal/controller/presence"
+	"redis-demo/internal/controller/task"
 	"redis-demo/internal/controller/team"
 	"redis-demo/internal/controller/user"
 	"redis-demo/internal/middleware"
@@ -35,6 +36,7 @@ var (
 						user.NewV1(),
 						team.NewV1(),
 						presence.NewV1(),
+						task.NewV1(),
 					)
 				})
 			})

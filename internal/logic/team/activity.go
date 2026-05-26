@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	v1 "redis-demo/api/team/v1"
+	"redis-demo/internal/dao"
 	"time"
 
+	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/frame/g"
 )
 
@@ -45,7 +47,15 @@ func AddActivity(ctx context.Context, teamId uint64, activity v1.ActivityItem) e
 
 // GetActivities 查询团队最近动态。
 // Redis List 按最新在前的顺序返回前 20 条动态。
-func GetActivities(ctx context.Context, teamId uint64) ([]v1.ActivityItem, error) {
+func GetActivities(ctx context.Context, userId uint64, teamId uint64) ([]v1.ActivityItem, error) {
+	count, err := dao.TeamMember.Ctx(ctx).Where("team_id", teamId).Where("user_id", userId).Count()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, gerror.New("你没有权限查看该团队的动态")
+	}
+
 	key := teamActivitiesKey(teamId)
 
 	values, err := g.Redis().LRange(ctx, key, 0, 19) // 获取列表前 20 条动态。values 是一个字符串切片，每个元素都是一个 JSON 字符串，表示一条动态。

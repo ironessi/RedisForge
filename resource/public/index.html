@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RedisForge Console</title>
-  <link rel="stylesheet" href="/resource/css/app.css?v=20260526-1">
+  <link rel="stylesheet" href="/resource/css/app.css?v=20260527-2">
 </head>
 <body>
   <main class="shell">
@@ -38,6 +38,7 @@
           <li><span class="dot cache"></span><b>Cache</b><small>用户资料 Cache Aside</small></li>
           <li><span class="dot set"></span><b>Set</b><small>团队成员、在线候选人</small></li>
           <li><span class="dot list"></span><b>List</b><small>团队最近动态</small></li>
+          <li><span class="dot zset"></span><b>ZSet</b><small>热门任务排行榜</small></li>
           <li><span class="dot ttl"></span><b>TTL</b><small>验证码 5 分钟、心跳 60 秒</small></li>
         </ul>
       </section>
@@ -56,7 +57,7 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">Internal collaboration console</p>
-          <h2>身份、团队与在线状态</h2>
+          <h2>身份、团队与任务协作</h2>
         </div>
         <div class="top-actions">
           <button id="refreshProfileBtn" class="secondary" type="button">刷新资料</button>
@@ -84,6 +85,14 @@
         <div class="status-card">
           <span>Activity Feed</span>
           <strong id="activityMetric">未加载</strong>
+        </div>
+        <div class="status-card">
+          <span>Tasks</span>
+          <strong id="taskMetric">未加载</strong>
+        </div>
+        <div class="status-card">
+          <span>Hot Tasks</span>
+          <strong id="hotMetric">未加载</strong>
         </div>
       </section>
 
@@ -200,6 +209,102 @@
           </div>
         </section>
 
+        <section class="panel task-card wide-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Task Workflow</span>
+              <h3>任务流转</h3>
+            </div>
+            <div class="mini-badge">MySQL + List + ZSet</div>
+          </div>
+          <div class="task-layout">
+            <form id="taskCreateForm" class="task-composer">
+              <div class="list-title">创建任务</div>
+              <label>
+                团队 ID
+                <input name="teamId" inputmode="numeric" placeholder="1" required>
+              </label>
+              <label>
+                任务标题
+                <input name="title" placeholder="例如：完善部署文档" required>
+              </label>
+              <label>
+                任务描述
+                <textarea name="description" rows="3" placeholder="补充目标与交付内容" required></textarea>
+              </label>
+              <div class="task-form-fields">
+                <label>
+                  负责人 ID
+                  <input name="assigneeId" inputmode="numeric" placeholder="0 表示暂不分配" value="0">
+                </label>
+                <label>
+                  优先级
+                  <select name="priority" required>
+                    <option value="1">低</option>
+                    <option value="2" selected>中</option>
+                    <option value="3">高</option>
+                  </select>
+                </label>
+              </div>
+              <button class="primary full" type="submit">创建任务</button>
+            </form>
+            <div>
+              <div class="task-toolbar">
+                <label>
+                  团队 ID
+                  <input id="taskTeamId" inputmode="numeric" placeholder="1">
+                </label>
+                <button id="loadTasksBtn" class="secondary" type="button">刷新任务</button>
+              </div>
+              <div id="taskList" class="task-list">
+                选择团队后查看任务列表。
+              </div>
+            </div>
+          </div>
+          <section class="task-detail" aria-live="polite">
+            <div class="task-detail-head">
+              <div>
+                <span class="list-title">任务详情与编辑</span>
+                <strong id="selectedTaskTitle">从列表中查看一条任务。</strong>
+              </div>
+              <span id="selectedTaskStatus" class="task-status neutral">未选择</span>
+            </div>
+            <div id="taskDetailControls" hidden>
+              <p id="selectedTaskMeta" class="task-detail-meta"></p>
+              <form id="taskEditForm" class="task-edit-form">
+                <label>
+                  标题
+                  <input name="title" required>
+                </label>
+                <label>
+                  描述
+                  <textarea name="description" rows="3" required></textarea>
+                </label>
+                <div class="task-form-fields">
+                  <label>
+                    负责人 ID
+                    <input name="assigneeId" inputmode="numeric" placeholder="0 表示解除分配">
+                  </label>
+                  <label>
+                    优先级
+                    <select name="priority" required>
+                      <option value="1">低</option>
+                      <option value="2">中</option>
+                      <option value="3">高</option>
+                    </select>
+                  </label>
+                </div>
+                <button class="secondary" type="submit">保存任务信息</button>
+              </form>
+              <div class="task-status-actions" aria-label="更新任务状态">
+                <button class="secondary task-status-action" data-status="todo" type="button">设为待处理</button>
+                <button class="secondary task-status-action" data-status="doing" type="button">设为进行中</button>
+                <button class="secondary task-status-action" data-status="done" type="button">设为已完成</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
         <section class="panel activity-card wide-card">
           <div class="section-head">
             <div>
@@ -216,6 +321,27 @@
             <button id="loadActivitiesBtn" class="secondary" type="button">刷新动态</button>
           </div>
           <div id="activityList" class="activity-list">暂无动态。</div>
+        </section>
+
+        <section class="panel hot-task-card wide-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Trending Tasks</span>
+              <h3>热门任务</h3>
+            </div>
+            <div class="mini-badge">Sorted Set</div>
+          </div>
+          <div class="hot-task-toolbar">
+            <label>
+              团队 ID
+              <input id="hotTaskTeamId" inputmode="numeric" placeholder="1">
+            </label>
+            <button id="loadHotTasksBtn" class="secondary" type="button">刷新排行</button>
+          </div>
+          <!-- 查看任务详情会增加该任务的 Redis 热度，并立即反映到当前排行中。 -->
+          <div id="hotTaskList" class="hot-task-list">
+            查看任务详情后，这里会显示热门任务排行。
+          </div>
         </section>
 
         <section class="panel presence-card">
@@ -279,6 +405,6 @@
       </div>
     </section>
   </main>
-  <script src="/resource/js/app.js?v=20260526-1"></script>
+  <script src="/resource/js/app.js?v=20260527-2"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"redis-demo/internal/controller/auth"
+	"redis-demo/internal/controller/notification"
 	"redis-demo/internal/controller/presence"
 	"redis-demo/internal/controller/task"
 	"redis-demo/internal/controller/team"
@@ -37,6 +38,7 @@ var (
 						team.NewV1(),
 						presence.NewV1(),
 						task.NewV1(),
+						notification.NewV1(),
 					)
 				})
 			})

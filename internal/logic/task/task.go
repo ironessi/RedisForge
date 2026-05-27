@@ -8,6 +8,7 @@ import (
 	taskV1 "redis-demo/api/task/v1"
 	teamV1 "redis-demo/api/team/v1"
 	"redis-demo/internal/dao"
+	notificationLogic "redis-demo/internal/logic/notification"
 	"redis-demo/internal/logic/team"
 	"redis-demo/internal/model/do"
 	"redis-demo/internal/model/entity"
@@ -214,8 +215,19 @@ func UpdateTask(ctx context.Context, operatorId uint64, taskId uint64, title str
 		return err
 	}
 
-	_, err = g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id)
-	return err
+	if _, err = g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id); err != nil {
+		return err
+	}
+
+	// 2. 判断负责人是否发生变化，且新负责人非零
+	if assigneeId > 0 && assigneeId != task.AssigneeId {
+		if err := notificationLogic.CreateNotification(ctx, assigneeId, operatorId, notificationLogic.TypeTaskAssigned, fmt.Sprintf("用户%d将任务%s交给了您", operatorId, title), task.Id); err != nil {
+			return err
+		}
+	}
+
+	// 4. 返回 nil
+	return nil
 }
 
 func UpdateStatus(ctx context.Context, operatorId uint64, taskId uint64, status string) error {

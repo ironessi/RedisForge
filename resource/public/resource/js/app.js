@@ -5,7 +5,9 @@ const state = {
   activityCount: null,
   taskCount: null,
   hotTaskCount: null,
+  unreadCount: null,
   tasks: [],
+  notifications: [],
   selectedTask: null,
 };
 
@@ -119,6 +121,8 @@ function renderMetrics() {
   $("#activityMetric").textContent = state.activityCount === null ? "未加载" : `${state.activityCount} 条`;
   $("#taskMetric").textContent = state.taskCount === null ? "未加载" : `${state.taskCount} 条`;
   $("#hotMetric").textContent = state.hotTaskCount === null ? "未加载" : `${state.hotTaskCount} 条`;
+  $("#notificationMetric").textContent = state.unreadCount === null ? "未加载" : `${state.unreadCount} 未读`;
+  $("#unreadBadge").textContent = state.unreadCount === null ? "未加载" : `${state.unreadCount} 条未读`;
   document.body.classList.toggle("is-online", Boolean(state.token));
 }
 
@@ -211,6 +215,59 @@ function renderActivities(activities) {
     time.textContent = new Date(activity.createdAt * 1000).toLocaleString();
 
     item.append(mark, body, time);
+    target.append(item);
+  });
+}
+
+function renderNotifications(notifications) {
+  const target = $("#notificationList");
+  target.replaceChildren();
+  state.notifications = notifications;
+
+  if (!notifications.length) {
+    target.textContent = "暂无通知。";
+    return;
+  }
+
+  notifications.forEach((notification) => {
+    const unread = notification.isRead === 0;
+    const item = document.createElement("div");
+    item.className = `notification-item${unread ? " unread" : ""}`;
+
+    const mark = document.createElement("div");
+    mark.className = "notification-mark";
+    mark.textContent = unread ? "!" : "OK";
+
+    const body = document.createElement("div");
+    body.className = "notification-body";
+    const title = document.createElement("b");
+    title.textContent = notification.content;
+    const detail = document.createElement("small");
+    const typeLabel = notification.type === "task_assigned" ? "任务指派" : notification.type;
+    detail.textContent =
+      `${typeLabel} · 任务 #${notification.relatedTaskId} · ${notification.createdAt || ""}`;
+    body.append(title, detail);
+
+    if (unread) {
+      const readButton = document.createElement("button");
+      readButton.type = "button";
+      readButton.className = "secondary notification-read";
+      readButton.textContent = "标记已读";
+      readButton.addEventListener("click", async () => {
+        try {
+          await markNotificationAsRead(notification.notificationId);
+        } catch (error) {
+          setLog("标记通知失败", error, "SREM notification:unread:{userId}");
+        }
+      });
+      item.append(mark, body, readButton);
+    } else {
+      const readState = document.createElement("span");
+      readState.className = "read-state";
+      readState.textContent = "已读";
+      item.append(mark, body, readState);
+    }
+
     target.append(item);
   });
 }
@@ -351,6 +408,30 @@ async function refreshProfile() {
   setLog("GET /user/profile", body, "user:profile:{id}");
 }
 
+async function loadNotifications(shouldLog = true) {
+  const [listBody, countBody] = await Promise.all([
+    request("/notifications"),
+    request("/notifications/unread-count"),
+  ]);
+  state.unreadCount = Number(countBody.data.count || 0);
+  renderNotifications(listBody.data.notifications || []);
+  renderMetrics();
+  if (shouldLog) {
+    setLog("GET /notifications + /unread-count", {
+      notifications: listBody.data.notifications || [],
+      unreadCount: state.unreadCount,
+    }, "SCARD notification:unread:{userId}");
+  }
+}
+
+async function markNotificationAsRead(notificationId) {
+  const body = await request(`/notifications/${notificationId}/read`, {
+    method: "PATCH",
+  });
+  await loadNotifications(false);
+  setLog(`PATCH /notifications/${notificationId}/read`, body, "SREM notification:unread:{userId}");
+}
+
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
@@ -391,7 +472,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     });
     setToken(body.data.token);
     setLog("POST /auth/login", { ...body, data: { token: `${body.data.token.slice(0, 18)}...` } }, "JWT");
-    await refreshProfile();
+    await Promise.all([refreshProfile(), loadNotifications(false)]);
   } catch (error) {
     setLog("登录失败", error, "captcha 校验");
   }
@@ -426,6 +507,9 @@ $("#logoutBtn").addEventListener("click", async () => {
   } finally {
     setToken("");
     renderProfile(null);
+    state.unreadCount = null;
+    renderNotifications([]);
+    renderMetrics();
   }
 });
 
@@ -668,6 +752,14 @@ $("#loadHotTasksBtn").addEventListener("click", async () => {
   }
 });
 
+$("#loadNotificationsBtn").addEventListener("click", async () => {
+  try {
+    await loadNotifications();
+  } catch (error) {
+    setLog("查询通知失败", error, "notification:unread:{userId}");
+  }
+});
+
 $("#heartbeatForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = getFormData(event.currentTarget);
@@ -723,5 +815,6 @@ if (state.lastTeamId) {
   $("#hotTaskTeamId").value = state.lastTeamId;
 }
 if (state.token) {
-  refreshProfile().catch((error) => setLog("自动刷新资料失败", error, "token 可能过期"));
+  Promise.all([refreshProfile(), loadNotifications(false)])
+    .catch((error) => setLog("自动刷新会话失败", error, "token 可能过期"));
 }

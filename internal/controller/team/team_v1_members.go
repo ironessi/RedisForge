@@ -11,7 +11,6 @@ import (
 )
 
 // Members 查询团队成员列表。
-// 当前只要求登录；后面可以进一步限制为团队成员才能查看。
 func (c *ControllerV1) Members(ctx context.Context, req *v1.MembersReq) (res *v1.MembersRes, err error) {
 	// 从 JWT 鉴权上下文中取出当前用户 ID，确保请求来自已登录用户。
 	userId := g.RequestFromCtx(ctx).GetCtxVar(middleware.ContextUserId).Uint64()
@@ -19,7 +18,7 @@ func (c *ControllerV1) Members(ctx context.Context, req *v1.MembersReq) (res *v1
 		return nil, gerror.New("请先登录")
 	}
 
-	members, err := teamLogic.GetMembers(ctx, req.TeamId)
+	members, err := teamLogic.GetMembers(ctx, userId, req.TeamId)
 	if err != nil {
 		return nil, err
 	}

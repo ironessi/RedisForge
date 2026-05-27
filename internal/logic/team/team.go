@@ -150,7 +150,7 @@ func AddMember(ctx context.Context, operatorId, teamId, targetUserId uint64) err
 
 // GetMembers 查询团队成员列表。
 // 优先使用 Redis Set 中的成员 userId；缓存不存在时从 MySQL 重建。
-func GetMembers(ctx context.Context, teamId uint64) ([]v1.MemberItem, error) {
+func GetMembers(ctx context.Context, userId uint64, teamId uint64) ([]v1.MemberItem, error) {
 	// 1. 判断团队是否存在。
 	count, err := dao.Team.Ctx(ctx).Where("id", teamId).Count()
 	if err != nil {
@@ -161,6 +161,18 @@ func GetMembers(ctx context.Context, teamId uint64) ([]v1.MemberItem, error) {
 	}
 
 	key := teamMembersKey(teamId)
+
+	count, err = dao.TeamMember.Ctx(ctx).
+		Where("team_id", teamId).
+		Where("user_id", userId).
+		Count()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, gerror.New("你没有权限查看该团队成员")
+	}
+
 	// 2. 优先从 Redis Set 获取成员 userId 列表。
 	values, err := g.Redis().SMembers(ctx, key) //返回字符串切片
 	if err != nil {

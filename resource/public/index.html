@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RedisForge Console</title>
-  <link rel="stylesheet" href="/resource/css/app.css?v=20260527-2">
+  <link rel="stylesheet" href="/resource/css/app.css?v=20260527-3">
 </head>
 <body>
   <main class="shell">
@@ -36,7 +36,7 @@
         <ul class="redis-list">
           <li><span class="dot string"></span><b>String</b><small>验证码、JWT 黑名单、在线心跳</small></li>
           <li><span class="dot cache"></span><b>Cache</b><small>用户资料 Cache Aside</small></li>
-          <li><span class="dot set"></span><b>Set</b><small>团队成员、在线候选人</small></li>
+          <li><span class="dot set"></span><b>Set</b><small>团队成员、在线候选人、通知未读数</small></li>
           <li><span class="dot list"></span><b>List</b><small>团队最近动态</small></li>
           <li><span class="dot zset"></span><b>ZSet</b><small>热门任务排行榜</small></li>
           <li><span class="dot ttl"></span><b>TTL</b><small>验证码 5 分钟、心跳 60 秒</small></li>
@@ -93,6 +93,10 @@
         <div class="status-card">
           <span>Hot Tasks</span>
           <strong id="hotMetric">未加载</strong>
+        </div>
+        <div class="status-card">
+          <span>Notifications</span>
+          <strong id="notificationMetric">未加载</strong>
         </div>
       </section>
 
@@ -305,6 +309,26 @@
           </section>
         </section>
 
+        <section class="panel notification-card wide-card">
+          <div class="section-head">
+            <div>
+              <span class="section-kicker">Notification Inbox</span>
+              <h3>通知中心</h3>
+            </div>
+            <div class="mini-badge">MySQL + Set</div>
+          </div>
+          <div class="notification-toolbar">
+            <p class="muted">任务指派会写入通知，未读数量由 Redis Set 加速统计。</p>
+            <div class="notification-actions">
+              <span id="unreadBadge" class="unread-badge">未加载</span>
+              <button id="loadNotificationsBtn" class="secondary" type="button">刷新通知</button>
+            </div>
+          </div>
+          <div id="notificationList" class="notification-list">
+            登录后可查看分配给你的任务通知。
+          </div>
+        </section>
+
         <section class="panel activity-card wide-card">
           <div class="section-head">
             <div>
@@ -405,6 +429,6 @@
       </div>
     </section>
   </main>
-  <script src="/resource/js/app.js?v=20260527-2"></script>
+  <script src="/resource/js/app.js?v=20260527-3"></script>
 </body>
 </html>

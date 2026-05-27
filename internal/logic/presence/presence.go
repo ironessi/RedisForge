@@ -51,7 +51,18 @@ func Heartbeat(ctx context.Context, userId uint64, teamId uint64) error {
 
 // GetOnlineMembers 查询团队在线成员。
 // 它会先查团队成员，再逐个检查 presence:user:{userId} 是否存在。
-func GetOnlineMembers(ctx context.Context, teamId uint64) ([]entity.User, error) {
+func GetOnlineMembers(ctx context.Context, userId uint64, teamId uint64) ([]entity.User, error) {
+	count, err := dao.TeamMember.Ctx(ctx).
+		Where("team_id", teamId).
+		Where("user_id", userId).
+		Count()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, gerror.New("你没有权限查看该团队在线成员")
+	}
+
 	teamKey := presenceTeamKey(teamId)
 
 	// 查询团队最近在线候选成员。

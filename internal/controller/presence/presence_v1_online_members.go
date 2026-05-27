@@ -11,14 +11,13 @@ import (
 )
 
 // OnlineMembers 查询团队在线成员。
-// 当前要求已登录，后续可以限制只有团队成员可查看。
 func (c *ControllerV1) OnlineMembers(ctx context.Context, req *v1.OnlineMembersReq) (res *v1.OnlineMembersRes, err error) {
 	userId := g.RequestFromCtx(ctx).GetCtxVar(middleware.ContextUserId).Uint64()
 	if userId == 0 {
 		return nil, gerror.New("请先登录")
 	}
 
-	users, err := presenceLogic.GetOnlineMembers(ctx, req.TeamId)
+	users, err := presenceLogic.GetOnlineMembers(ctx, userId, req.TeamId)
 	if err != nil {
 		return nil, err
 	}

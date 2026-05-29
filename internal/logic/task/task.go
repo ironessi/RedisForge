@@ -274,8 +274,18 @@ func UpdateStatus(ctx context.Context, operatorId uint64, taskId uint64, status 
 		return err
 	}
 
-	_, err = g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id)
-	return err
+	// 6. 更新任务热度
+	if _, err = g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id); err != nil {
+		return err
+	}
+	// 7. 如果任务有负责人，且负责人不是操作者本人，则创建状态变化通知
+	if task.AssigneeId > 0 && task.AssigneeId != operatorId {
+		if err := notificationLogic.CreateNotification(ctx, task.AssigneeId, operatorId, notificationLogic.TypeTaskStatusUpdated, fmt.Sprintf("用户%d将任务%s的状态更新为%s", operatorId, task.Title, status), task.Id); err != nil {
+			return err
+		}
+	}
+	// 8. 返回 nil
+	return nil
 }
 
 func GetHotTasks(ctx context.Context, userId uint64, teamId uint64) ([]taskV1.HotTaskItem, error) {

@@ -15,8 +15,8 @@ import (
 
 const (
 	notificationListLimit = 20
-
-	TypeTaskAssigned = "task_assigned"
+	TypeTaskStatusUpdated = "task_status_updated"
+	TypeTaskAssigned      = "task_assigned"
 )
 
 // notificationUnreadKey 生成当前用户的未读通知集合 key。

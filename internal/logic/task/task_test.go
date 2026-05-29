@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"redis-demo/internal/dao"
+	notificationLogic "redis-demo/internal/logic/notification"
 	"redis-demo/internal/model/entity"
 
 	_ "github.com/gogf/gf/contrib/drivers/mysql/v2"
@@ -206,4 +207,230 @@ func updateTaskTestFixture(t *testing.T) (entity.Task, uint64, uint64) {
 
 	t.Fatalf("team %d has no outside user fixture", task.TeamId)
 	return entity.Task{}, 0, 0
+}
+
+func TestUpdateStatusCreatesNotificationForAssignee(t *testing.T) {
+	ctx := gctx.New()
+	task, operatorId, assigneeId := statusNotificationTestFixture(t)
+	newStatus := nextStatus(task.Status)
+	activityKey := fmt.Sprintf("team:activities:%d", task.TeamId)
+
+	_, err := dao.Task.Ctx(ctx).Where("id", task.Id).Data(g.Map{
+		"assignee_id": assigneeId,
+	}).Update()
+	if err != nil {
+		t.Fatalf("prepare assignee failed: %v", err)
+	}
+
+	err = UpdateStatus(ctx, operatorId, task.Id, newStatus)
+	if err != nil {
+		t.Fatalf("UpdateStatus failed: %v", err)
+	}
+
+	var created entity.Notification
+	err = dao.Notification.Ctx(ctx).
+		Where("receiver_id", assigneeId).
+		Where("actor_id", operatorId).
+		Where("type", notificationLogic.TypeTaskStatusUpdated).
+		Where("related_task_id", task.Id).
+		OrderDesc("id").
+		Limit(1).
+		Scan(&created)
+	if err != nil {
+		t.Fatalf("query created notification failed: %v", err)
+	}
+	if created.Id == 0 {
+		t.Fatal("status update notification was not created")
+	}
+	if !strings.Contains(created.Content, newStatus) {
+		t.Fatalf("notification content should include new status, got: %s", created.Content)
+	}
+
+	inUnreadSet, err := g.Redis().SIsMember(ctx, fmt.Sprintf("notification:unread:%d", assigneeId), created.Id)
+	if err != nil {
+		t.Fatalf("check unread set failed: %v", err)
+	}
+	if inUnreadSet != 1 {
+		t.Fatalf("notification %d was not added to unread set", created.Id)
+	}
+
+	t.Cleanup(func() {
+		restoreTaskForStatusTest(t, task)
+
+		if _, err := dao.Notification.Ctx(ctx).Where("id", created.Id).Delete(); err != nil {
+			t.Errorf("delete test notification failed: %v", err)
+		}
+		if _, err := g.Redis().SRem(ctx, fmt.Sprintf("notification:unread:%d", assigneeId), created.Id); err != nil {
+			t.Errorf("remove test notification from unread set failed: %v", err)
+		}
+		if _, err := g.Redis().LPop(ctx, activityKey); err != nil {
+			t.Errorf("remove test activity failed: %v", err)
+		}
+		if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), -1, task.Id); err != nil {
+			t.Errorf("restore heat failed: %v", err)
+		}
+	})
+}
+
+func TestUpdateStatusUnchangedDoesNotCreateNotification(t *testing.T) {
+	ctx := gctx.New()
+	task, operatorId, assigneeId := statusNotificationTestFixture(t)
+	activityKey := fmt.Sprintf("team:activities:%d", task.TeamId)
+
+	beforeNotifications, err := dao.Notification.Ctx(ctx).
+		Where("receiver_id", assigneeId).
+		Where("actor_id", operatorId).
+		Where("type", notificationLogic.TypeTaskStatusUpdated).
+		Where("related_task_id", task.Id).
+		Count()
+	if err != nil {
+		t.Fatalf("count notifications before update failed: %v", err)
+	}
+
+	beforeActivities, err := g.Redis().LLen(ctx, activityKey)
+	if err != nil {
+		t.Fatalf("read activity count before update failed: %v", err)
+	}
+
+	beforeHeat, err := g.Redis().ZScore(ctx, taskHotKey(task.TeamId), task.Id)
+	if err != nil {
+		t.Fatalf("read heat before update failed: %v", err)
+	}
+
+	err = UpdateStatus(ctx, operatorId, task.Id, task.Status)
+	if err != nil {
+		t.Fatalf("UpdateStatus unchanged failed: %v", err)
+	}
+
+	afterNotifications, err := dao.Notification.Ctx(ctx).
+		Where("receiver_id", assigneeId).
+		Where("actor_id", operatorId).
+		Where("type", notificationLogic.TypeTaskStatusUpdated).
+		Where("related_task_id", task.Id).
+		Count()
+	if err != nil {
+		t.Fatalf("count notifications after update failed: %v", err)
+	}
+
+	afterActivities, err := g.Redis().LLen(ctx, activityKey)
+	if err != nil {
+		t.Fatalf("read activity count after update failed: %v", err)
+	}
+
+	afterHeat, err := g.Redis().ZScore(ctx, taskHotKey(task.TeamId), task.Id)
+	if err != nil {
+		t.Fatalf("read heat after update failed: %v", err)
+	}
+
+	if afterNotifications != beforeNotifications {
+		t.Fatalf("notification count changed: before=%d after=%d", beforeNotifications, afterNotifications)
+	}
+	if afterActivities != beforeActivities {
+		t.Fatalf("activity count changed: before=%d after=%d", beforeActivities, afterActivities)
+	}
+	if afterHeat != beforeHeat {
+		t.Fatalf("heat changed: before=%v after=%v", beforeHeat, afterHeat)
+	}
+}
+
+func TestUpdateStatusDoesNotNotifySelf(t *testing.T) {
+	ctx := gctx.New()
+	task, operatorId, _ := statusNotificationTestFixture(t)
+	newStatus := nextStatus(task.Status)
+	activityKey := fmt.Sprintf("team:activities:%d", task.TeamId)
+
+	_, err := dao.Task.Ctx(ctx).Where("id", task.Id).Data(g.Map{
+		"assignee_id": operatorId,
+	}).Update()
+	if err != nil {
+		t.Fatalf("prepare self assignee failed: %v", err)
+	}
+
+	beforeNotifications, err := dao.Notification.Ctx(ctx).
+		Where("receiver_id", operatorId).
+		Where("actor_id", operatorId).
+		Where("type", notificationLogic.TypeTaskStatusUpdated).
+		Where("related_task_id", task.Id).
+		Count()
+	if err != nil {
+		t.Fatalf("count notifications before update failed: %v", err)
+	}
+
+	err = UpdateStatus(ctx, operatorId, task.Id, newStatus)
+	if err != nil {
+		t.Fatalf("UpdateStatus self assignee failed: %v", err)
+	}
+
+	afterNotifications, err := dao.Notification.Ctx(ctx).
+		Where("receiver_id", operatorId).
+		Where("actor_id", operatorId).
+		Where("type", notificationLogic.TypeTaskStatusUpdated).
+		Where("related_task_id", task.Id).
+		Count()
+	if err != nil {
+		t.Fatalf("count notifications after update failed: %v", err)
+	}
+
+	if afterNotifications != beforeNotifications {
+		t.Fatalf("self notification should not be created: before=%d after=%d", beforeNotifications, afterNotifications)
+	}
+
+	t.Cleanup(func() {
+		restoreTaskForStatusTest(t, task)
+
+		if _, err := g.Redis().LPop(ctx, activityKey); err != nil {
+			t.Errorf("remove test activity failed: %v", err)
+		}
+		if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), -1, task.Id); err != nil {
+			t.Errorf("restore heat failed: %v", err)
+		}
+	})
+}
+
+func statusNotificationTestFixture(t *testing.T) (entity.Task, uint64, uint64) {
+	t.Helper()
+	ctx := gctx.New()
+
+	var tasks []entity.Task
+	if err := dao.Task.Ctx(ctx).OrderAsc("id").Scan(&tasks); err != nil {
+		t.Fatalf("query task fixtures failed: %v", err)
+	}
+
+	for _, task := range tasks {
+		var members []entity.TeamMember
+		if err := dao.TeamMember.Ctx(ctx).Where("team_id", task.TeamId).OrderAsc("user_id").Scan(&members); err != nil {
+			t.Fatalf("query team members failed: %v", err)
+		}
+		if len(members) >= 2 {
+			return task, members[0].UserId, members[1].UserId
+		}
+	}
+
+	t.Fatal("no task fixture with at least two team members")
+	return entity.Task{}, 0, 0
+}
+
+func restoreTaskForStatusTest(t *testing.T, original entity.Task) {
+	t.Helper()
+	ctx := gctx.New()
+
+	var originalAssignee any
+	if original.AssigneeId > 0 {
+		originalAssignee = original.AssigneeId
+	}
+
+	_, err := dao.Task.Ctx(ctx).Where("id", original.Id).Data(g.Map{
+		"status":      original.Status,
+		"assignee_id": originalAssignee,
+	}).Update()
+	if err != nil {
+		t.Errorf("restore task status fields failed: %v", err)
+	}
+}
+
+func nextStatus(status string) string {
+	if status == "doing" {
+		return "done"
+	}
+	return "doing"
 }

@@ -3,11 +3,14 @@ package task
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	mathRand "math/rand"
 	taskV1 "redis-demo/api/task/v1"
 	teamV1 "redis-demo/api/team/v1"
 	"redis-demo/internal/dao"
+	lockLogic "redis-demo/internal/logic/lock"
 	notificationLogic "redis-demo/internal/logic/notification"
 	"redis-demo/internal/logic/team"
 	"redis-demo/internal/model/do"
@@ -18,12 +21,26 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 )
 
-const TaskStatusTodo = "todo"
+const (
+	TaskStatusTodo = "todo"
+
+	taskDetailCacheNullValue = "__NULL__"
+	taskDetailCacheExpire    = 5 * time.Minute
+	taskDetailCacheJitterMax = 60 * time.Second
+	taskDetailNullExpire     = 60 * time.Second
+	taskDetailLockExpire     = 10 * time.Second
+	taskDetailWaitRetry      = 50 * time.Millisecond
+)
 
 // taskHotKey 生成团队热门任务排行榜 key。
 // 例如 teamId=7 时，key 为：team:task:hot:7
 func taskHotKey(teamId uint64) string {
 	return fmt.Sprintf("team:task:hot:%d", teamId)
+}
+
+func taskDetailCacheKey(taskId uint64) string {
+	// 返回 task:detail:{taskId}
+	return fmt.Sprintf("task:detail:%d", taskId)
 }
 
 // CreateTask 创建团队任务。
@@ -117,20 +134,58 @@ func GetTasks(ctx context.Context, userId uint64, teamId uint64) ([]taskV1.TaskI
 }
 
 func GetTask(ctx context.Context, userId uint64, taskId uint64) (*taskV1.TaskItem, error) {
-	// 1. 根据 taskId 查询任务
-	var task entity.Task
-	err := dao.Task.Ctx(ctx).Where("id", taskId).Scan(&task)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, gerror.New("任务不存在")
-	}
+	// 1. 先查 Redis 任务详情缓存。
+	// hit=false 表示 Redis 没有这个 key；hit=true 表示已经从缓存得到结果。
+	// 如果命中 "__NULL__"，getTaskFromCache 会直接返回“任务不存在”，用于防缓存穿透。
+	task, hit, err := getTaskFromCache(ctx, taskId)
 	if err != nil {
 		return nil, err
 	}
-	// 2. 判断任务是否存在
-	if task.Id == 0 {
-		return nil, gerror.New("任务不存在")
+
+	// 2. 缓存未命中时，进入“缓存击穿”处理。
+	// 热门 key 过期的一瞬间，可能有大量请求同时进来；
+	// 这里用 Redis 分布式锁控制只有一个请求去查 MySQL 并重建缓存。
+	if !hit {
+		lock, locked, err := lockLogic.TryLock(ctx, taskDetailLockKey(taskId), taskDetailLockExpire)
+		if err != nil {
+			return nil, err
+		}
+
+		if locked {
+			// 3. 拿到锁的请求负责回源 MySQL，并把查询结果重新写回 Redis。
+			// defer 保证函数返回前释放锁，避免后续请求一直等锁过期。
+			defer func() {
+				_ = lockLogic.Unlock(ctx, lock)
+			}()
+
+			task, err = getTaskFromDBAndCache(ctx, taskId)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// 4. 没拿到锁，说明可能已经有另一个请求正在重建缓存。
+			// 先短暂等待，再读一次 Redis，优先复用别人刚刚写好的缓存结果。
+			time.Sleep(taskDetailWaitRetry) // 等待 50 毫秒，避免频繁重试导致雪崩。
+
+			task, hit, err = getTaskFromCache(ctx, taskId)
+			if err != nil {
+				return nil, err
+			}
+
+			if !hit {
+				// 5. 等待后仍然没有缓存，说明持锁请求可能失败或还没写完。
+				// 当前版本选择降级查库，保证接口可用；后续可改为继续重试或返回“稍后再试”。
+				task, err = getTaskFromDBAndCache(ctx, taskId)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
-	// 3. 校验当前用户是否属于任务所在团队
+
+	// 6. 权限校验必须放在返回数据之前。
+	// 注意：即使任务来自 Redis 缓存，也不能直接返回；
+	// 因为缓存 key 只按 taskId 区分，不按用户区分，必须确认当前用户属于任务所在团队。
 	count, err := dao.TeamMember.Ctx(ctx).Where("team_id", task.TeamId).Where("user_id", userId).Count()
 	if err != nil {
 		return nil, err
@@ -139,11 +194,12 @@ func GetTask(ctx context.Context, userId uint64, taskId uint64) (*taskV1.TaskIte
 		return nil, gerror.New("你没有权限查看该任务")
 	}
 
-	if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id); err != nil { // 访问 Redis 记录任务热度，方便后续实现热门任务排行榜。
+	// 7. 记录任务访问热度，用于热门任务排行榜。
+	if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id); err != nil {
 		return nil, err
 	}
 
-	// 4. 转换为 taskV1.TaskItem 并返回
+	// 8. 把数据库实体转换成 API 返回结构，避免直接把 entity 暴露给接口层。
 	return &taskV1.TaskItem{
 		TaskId:      task.Id,
 		CreatorId:   task.CreatorId,
@@ -206,6 +262,11 @@ func UpdateTask(ctx context.Context, operatorId uint64, taskId uint64, title str
 		return err
 	}
 
+	// 编辑任务后删除旧的任务详情缓存，让下一次读取时从 MySQL 重建。
+	if err := deleteTaskDetailCache(ctx, taskId); err != nil {
+		return err
+	}
+
 	if err := team.AddActivity(ctx, task.TeamId, teamV1.ActivityItem{
 		Action:    "task_updated",
 		ActorId:   operatorId,
@@ -264,7 +325,13 @@ func UpdateStatus(ctx context.Context, operatorId uint64, taskId uint64, status 
 	if err != nil {
 		return err
 	}
-	// 5. 写入团队动态
+
+	// 5. 删除旧任务详情缓存
+	if err := deleteTaskDetailCache(ctx, taskId); err != nil {
+		return err
+	}
+
+	// 6. 写入团队动态
 	if err := team.AddActivity(ctx, task.TeamId, teamV1.ActivityItem{
 		Action:    "task_status_updated",
 		ActorId:   operatorId,
@@ -274,17 +341,17 @@ func UpdateStatus(ctx context.Context, operatorId uint64, taskId uint64, status 
 		return err
 	}
 
-	// 6. 更新任务热度
+	// 7. 更新任务热度
 	if _, err = g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), 1, task.Id); err != nil {
 		return err
 	}
-	// 7. 如果任务有负责人，且负责人不是操作者本人，则创建状态变化通知
+	// 8. 如果任务有负责人，且负责人不是操作者本人，则创建状态变化通知
 	if task.AssigneeId > 0 && task.AssigneeId != operatorId {
 		if err := notificationLogic.CreateNotification(ctx, task.AssigneeId, operatorId, notificationLogic.TypeTaskStatusUpdated, fmt.Sprintf("用户%d将任务%s的状态更新为%s", operatorId, task.Title, status), task.Id); err != nil {
 			return err
 		}
 	}
-	// 8. 返回 nil
+	// 9. 返回 nil
 	return nil
 }
 
@@ -337,4 +404,93 @@ func GetHotTasks(ctx context.Context, userId uint64, teamId uint64) ([]taskV1.Ho
 	// 4. 组装带 viewCount 的排行榜结果
 
 	return items, nil
+}
+
+// deleteTaskDetailCache 删除任务详情缓存。
+// 任务被编辑或状态变化后，删除缓存，让下一次读取从 MySQL 重建。
+func deleteTaskDetailCache(ctx context.Context, taskId uint64) error {
+	// 1. 生成 task:detail:{taskId}
+	key := taskDetailCacheKey(taskId)
+	// 2. 删除 Redis 缓存
+	_, err := g.Redis().Del(ctx, key)
+	// 3. 返回错误
+	return err
+}
+
+// taskDetailCacheTTL 生成任务详情缓存的 TTL。
+func taskDetailCacheTTL() time.Duration {
+	// 1. 生成 0 到 taskDetailCacheJitterMax 之间的随机秒数
+	jitterSeconds := mathRand.Int63n(int64(taskDetailCacheJitterMax.Seconds()) + 1)
+	// 2. 返回 taskDetailCacheExpire + 随机抖动
+	return taskDetailCacheExpire + time.Duration(jitterSeconds)*time.Second
+}
+
+// taskDetailLockKey 生成任务详情锁的 Redis key。
+func taskDetailLockKey(taskId uint64) string {
+	// 返回 lock:task:detail:{taskId}
+	return fmt.Sprintf("lock:task:detail:%d", taskId)
+}
+
+// 从 Redis 读取任务详情缓存的函数 getTaskFromCache 和从 MySQL 读取并重建缓存的函数 getTaskFromDBAndCache 都放在 task.go 中，因为它们都是 GetTask 这个核心功能的组成部分，且它们之间有直接的调用关系。把它们放在一起可以更清晰地看到 GetTask 的整体实现逻辑，以及缓存和数据库之间的交互细节。同时，这些函数虽然涉及 Redis 和 MySQL，但它们的职责都是围绕任务详情的获取和缓存管理，因此放在 task.go 中也符合单一职责原则。
+func getTaskFromCache(ctx context.Context, taskId uint64) (*entity.Task, bool, error) {
+	key := taskDetailCacheKey(taskId)
+
+	cacheValue, err := g.Redis().Get(ctx, key)
+	if err != nil {
+		return nil, false, err
+	}
+	if cacheValue.IsNil() {
+		// Redis 中没有 task:detail:{taskId}，说明缓存未命中，需要继续查 MySQL。
+		return nil, false, nil
+	}
+
+	value := cacheValue.String()
+	if value == taskDetailCacheNullValue {
+		// "__NULL__" 是空值缓存：表示 MySQL 已确认该任务不存在。
+		// 这样大量请求查询同一个不存在 taskId 时，不会反复打到 MySQL。
+		return nil, true, gerror.New("任务不存在")
+	}
+	var task entity.Task
+	if err := json.Unmarshal([]byte(value), &task); err != nil {
+		return nil, false, err
+	}
+	return &task, true, nil
+}
+func getTaskFromDBAndCache(ctx context.Context, taskId uint64) (*entity.Task, error) {
+	// 1. 查询 MySQL
+	var task entity.Task
+	err := dao.Task.Ctx(ctx).Where("id", taskId).Scan(&task)
+	if errors.Is(err, sql.ErrNoRows) {
+		// 2. MySQL 不存在，写 "__NULL__" 短 TTL。
+		// 这是缓存穿透保护：不存在的数据也缓存一小会儿，挡住重复无效查询。
+		if err := g.Redis().SetEX(ctx, taskDetailCacheKey(taskId), taskDetailCacheNullValue, int64(taskDetailNullExpire.Seconds())); err != nil {
+			return nil, err
+		}
+		return nil, gerror.New("任务不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if task.Id == 0 {
+		// GoFrame Scan 在某些情况下不会返回 sql.ErrNoRows，而是留下零值结构体。
+		// 所以这里再用 task.Id == 0 兜底判断一次“任务不存在”。
+		if err := g.Redis().SetEX(ctx, taskDetailCacheKey(taskId), taskDetailCacheNullValue, int64(taskDetailNullExpire.Seconds())); err != nil {
+			return nil, err
+		}
+		return nil, gerror.New("任务不存在")
+	}
+
+	// 3. MySQL 存在，写任务 JSON，TTL 带随机抖动
+	bytes, err := json.Marshal(task)
+	if err != nil {
+		return nil, err
+	}
+	ttl := taskDetailCacheTTL()
+	// TTL 加随机抖动是为了防缓存雪崩：避免大量任务详情 key 在同一秒同时过期。
+	if err := g.Redis().SetEX(ctx, taskDetailCacheKey(taskId), string(bytes), int64(ttl.Seconds())); err != nil {
+		return nil, err
+	}
+
+	// 4. 返回 task
+	return &task, nil
 }

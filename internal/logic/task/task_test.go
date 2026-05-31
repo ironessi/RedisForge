@@ -1,9 +1,11 @@
 package task
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"redis-demo/internal/dao"
 	notificationLogic "redis-demo/internal/logic/notification"
@@ -14,6 +16,254 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gctx"
 )
+
+func TestGetTaskCachesNullForMissingTask(t *testing.T) {
+	ctx := gctx.New()
+	missingTaskId := uint64(time.Now().UnixNano())
+	key := taskDetailCacheKey(missingTaskId)
+
+	t.Cleanup(func() {
+		if _, err := g.Redis().Del(ctx, key); err != nil {
+			t.Errorf("clean task detail null cache failed: %v", err)
+		}
+	})
+
+	_, err := GetTask(ctx, 1, missingTaskId)
+	if err == nil {
+		t.Fatal("missing task should return error")
+	}
+	if !strings.Contains(err.Error(), "任务不存在") {
+		t.Fatalf("unexpected missing task error: %v", err)
+	}
+
+	value, err := g.Redis().Get(ctx, key)
+	if err != nil {
+		t.Fatalf("read null cache failed: %v", err)
+	}
+	if value.String() != taskDetailCacheNullValue {
+		t.Fatalf("unexpected null cache value: %q", value.String())
+	}
+
+	ttl, err := g.Redis().TTL(ctx, key)
+	if err != nil {
+		t.Fatalf("read null cache ttl failed: %v", err)
+	}
+	if ttl <= 0 {
+		t.Fatalf("null cache should have ttl, got %d", ttl)
+	}
+
+	_, err = GetTask(ctx, 1, missingTaskId)
+	if err == nil {
+		t.Fatal("missing task cached as null should still return error")
+	}
+	if !strings.Contains(err.Error(), "任务不存在") {
+		t.Fatalf("unexpected cached missing task error: %v", err)
+	}
+}
+
+func TestGetTaskCachesExistingTaskAndKeepsPermissionCheck(t *testing.T) {
+	ctx := gctx.New()
+	task, memberId, outsiderId := updateTaskTestFixture(t)
+	key := taskDetailCacheKey(task.Id)
+
+	if _, err := g.Redis().Del(ctx, key); err != nil {
+		t.Fatalf("clean task detail cache before test failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if _, err := g.Redis().Del(ctx, key); err != nil {
+			t.Errorf("clean task detail cache after test failed: %v", err)
+		}
+		if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), -1, task.Id); err != nil {
+			t.Errorf("restore heat after member detail read failed: %v", err)
+		}
+	})
+
+	item, err := GetTask(ctx, memberId, task.Id)
+	if err != nil {
+		t.Fatalf("member get task failed: %v", err)
+	}
+	if item.TaskId != task.Id {
+		t.Fatalf("unexpected task item: %+v", item)
+	}
+
+	value, err := g.Redis().Get(ctx, key)
+	if err != nil {
+		t.Fatalf("read task detail cache failed: %v", err)
+	}
+	if value.IsNil() || value.String() == taskDetailCacheNullValue {
+		t.Fatalf("task detail cache should contain task json, got %q", value.String())
+	}
+
+	var cached entity.Task
+	if err := json.Unmarshal([]byte(value.String()), &cached); err != nil {
+		t.Fatalf("task detail cache should be json: %v", err)
+	}
+	if cached.Id != task.Id || cached.TeamId != task.TeamId {
+		t.Fatalf("unexpected cached task: %+v", cached)
+	}
+
+	_, err = GetTask(ctx, outsiderId, task.Id)
+	if err == nil {
+		t.Fatal("cached task should still reject outsider")
+	}
+	if !strings.Contains(err.Error(), "你没有权限查看该任务") {
+		t.Fatalf("unexpected outsider error: %v", err)
+	}
+}
+
+func TestUpdateTaskDeletesTaskDetailCache(t *testing.T) {
+	ctx := gctx.New()
+	original, operatorId, _ := updateTaskTestFixture(t)
+	key := taskDetailCacheKey(original.Id)
+	activityKey := fmt.Sprintf("team:activities:%d", original.TeamId)
+
+	if err := g.Redis().SetEX(ctx, key, `{"cached":"old"}`, int64(taskDetailCacheExpire.Seconds())); err != nil {
+		t.Fatalf("prepare task detail cache failed: %v", err)
+	}
+
+	updatedTitle := original.Title + "-cache-delete"
+	updatedDescription := original.Description + "-cache-delete"
+
+	err := UpdateTask(
+		ctx,
+		operatorId,
+		original.Id,
+		updatedTitle,
+		updatedDescription,
+		original.AssigneeId,
+		uint(original.Priority),
+	)
+	if err != nil {
+		t.Fatalf("UpdateTask failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		restoreTaskEditableFields(t, original)
+		if _, err := g.Redis().Del(ctx, key); err != nil {
+			t.Errorf("clean task detail cache failed: %v", err)
+		}
+		if _, err := g.Redis().LPop(ctx, activityKey); err != nil {
+			t.Errorf("remove test activity failed: %v", err)
+		}
+		if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(original.TeamId), -1, original.Id); err != nil {
+			t.Errorf("restore heat failed: %v", err)
+		}
+	})
+
+	value, err := g.Redis().Get(ctx, key)
+	if err != nil {
+		t.Fatalf("read task detail cache failed: %v", err)
+	}
+	if !value.IsNil() {
+		t.Fatalf("task detail cache should be deleted after update, got %q", value.String())
+	}
+}
+
+func TestUpdateStatusDeletesTaskDetailCache(t *testing.T) {
+	ctx := gctx.New()
+	task, operatorId, _ := statusNotificationTestFixture(t)
+	key := taskDetailCacheKey(task.Id)
+	activityKey := fmt.Sprintf("team:activities:%d", task.TeamId)
+	newStatus := nextStatus(task.Status)
+
+	if err := g.Redis().SetEX(ctx, key, `{"cached":"old"}`, int64(taskDetailCacheExpire.Seconds())); err != nil {
+		t.Fatalf("prepare task detail cache failed: %v", err)
+	}
+
+	err := UpdateStatus(ctx, operatorId, task.Id, newStatus)
+	if err != nil {
+		t.Fatalf("UpdateStatus failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		restoreTaskForStatusTest(t, task)
+		if _, err := g.Redis().Del(ctx, key); err != nil {
+			t.Errorf("clean task detail cache failed: %v", err)
+		}
+		if _, err := g.Redis().LPop(ctx, activityKey); err != nil {
+			t.Errorf("remove test activity failed: %v", err)
+		}
+		if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), -1, task.Id); err != nil {
+			t.Errorf("restore heat failed: %v", err)
+		}
+	})
+
+	value, err := g.Redis().Get(ctx, key)
+	if err != nil {
+		t.Fatalf("read task detail cache failed: %v", err)
+	}
+	if !value.IsNil() {
+		t.Fatalf("task detail cache should be deleted after status update, got %q", value.String())
+	}
+}
+
+func TestTaskDetailCacheTTLHasJitterRange(t *testing.T) {
+	minTTL := taskDetailCacheExpire
+	maxTTL := taskDetailCacheExpire + taskDetailCacheJitterMax
+
+	seenJitter := false
+	for i := 0; i < 100; i++ {
+		ttl := taskDetailCacheTTL()
+		if ttl < minTTL || ttl > maxTTL {
+			t.Fatalf("task detail cache ttl out of range: got=%s min=%s max=%s", ttl, minTTL, maxTTL)
+		}
+		if ttl > minTTL {
+			seenJitter = true
+		}
+	}
+
+	if !seenJitter {
+		t.Fatal("task detail cache ttl should include random jitter")
+	}
+}
+
+func TestGetTaskReleasesDetailLockAfterCacheRebuild(t *testing.T) {
+	ctx := gctx.New()
+	task, memberId, _ := updateTaskTestFixture(t)
+	cacheKey := taskDetailCacheKey(task.Id)
+	lockKey := taskDetailLockKey(task.Id)
+
+	if _, err := g.Redis().Del(ctx, cacheKey); err != nil {
+		t.Fatalf("clean task detail cache before test failed: %v", err)
+	}
+	if _, err := g.Redis().Del(ctx, lockKey); err != nil {
+		t.Fatalf("clean task detail lock before test failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if _, err := g.Redis().Del(ctx, cacheKey, lockKey); err != nil {
+			t.Errorf("clean task detail cache and lock failed: %v", err)
+		}
+		if _, err := g.Redis().ZIncrBy(ctx, taskHotKey(task.TeamId), -1, task.Id); err != nil {
+			t.Errorf("restore heat after detail read failed: %v", err)
+		}
+	})
+
+	item, err := GetTask(ctx, memberId, task.Id)
+	if err != nil {
+		t.Fatalf("GetTask failed: %v", err)
+	}
+	if item.TaskId != task.Id {
+		t.Fatalf("unexpected task item: %+v", item)
+	}
+
+	value, err := g.Redis().Get(ctx, cacheKey)
+	if err != nil {
+		t.Fatalf("read rebuilt task detail cache failed: %v", err)
+	}
+	if value.IsNil() {
+		t.Fatal("task detail cache should be rebuilt")
+	}
+
+	lockValue, err := g.Redis().Get(ctx, lockKey)
+	if err != nil {
+		t.Fatalf("read task detail lock after rebuild failed: %v", err)
+	}
+	if !lockValue.IsNil() {
+		t.Fatalf("task detail lock should be released after rebuild, got %q", lockValue.String())
+	}
+}
 
 func TestUpdateTaskRejectsNonMember(t *testing.T) {
 	ctx := gctx.New()
@@ -207,6 +457,26 @@ func updateTaskTestFixture(t *testing.T) (entity.Task, uint64, uint64) {
 
 	t.Fatalf("team %d has no outside user fixture", task.TeamId)
 	return entity.Task{}, 0, 0
+}
+
+func restoreTaskEditableFields(t *testing.T, original entity.Task) {
+	t.Helper()
+	ctx := gctx.New()
+
+	var originalAssignee any
+	if original.AssigneeId > 0 {
+		originalAssignee = original.AssigneeId
+	}
+
+	_, err := dao.Task.Ctx(ctx).Where("id", original.Id).Data(g.Map{
+		"title":       original.Title,
+		"description": original.Description,
+		"assignee_id": originalAssignee,
+		"priority":    original.Priority,
+	}).Update()
+	if err != nil {
+		t.Errorf("restore task editable fields failed: %v", err)
+	}
 }
 
 func TestUpdateStatusCreatesNotificationForAssignee(t *testing.T) {

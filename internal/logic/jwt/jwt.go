@@ -16,9 +16,9 @@ const (
 )
 
 type UserClaims struct {
-	UserId   int64  `json:"userId"`
-	Username string `json:"username"`
-	jwtlib.RegisteredClaims
+	UserId                  int64  `json:"userId"`
+	Username                string `json:"username"`
+	jwtlib.RegisteredClaims        // RegisteredClaims 包含了 JWT 标准字段，如 exp、iat、nbf 等。
 }
 
 func GenerateToken(ctx context.Context, userId int64, username string) (string, error) {
@@ -34,8 +34,8 @@ func GenerateToken(ctx context.Context, userId int64, username string) (string, 
 		},
 	}
 
-	token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
-	return token.SignedString([]byte(getSecret(ctx)))
+	token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims) // 使用 HMAC SHA256 签名算法，实际使用中可以根据需要选择其他算法。
+	return token.SignedString([]byte(getSecret(ctx)))                // 使用配置中的 secret 作为签名密钥，生成 JWT 字符串。
 }
 
 func ParseToken(ctx context.Context, tokenString string) (*UserClaims, error) {
